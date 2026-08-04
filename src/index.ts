@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import type { Connection } from "@solana/web3.js";
-import { config } from "./config";
-import { createConnection } from "./wallet";
+import { config, isLiveTradingSafeToAttempt, requireWalletConfig } from "./config";
+import { createConnection, loadWallet } from "./wallet";
 import { fetchPoolByAddress } from "./dex/meteoraApi";
 import { fetchPoolById } from "./dex/raydiumApi";
 import { fetchQuote } from "./dex/jupiterApi";
@@ -10,6 +10,7 @@ import { getOrLoadPool, getPrice as getMeteoraOnchainPrice } from "./meteora";
 import { raydiumPriceInCanonical } from "./dex/normalize";
 import { computeSpreadBps, decideEntry, type Venue } from "./strategy";
 import { PaperTrader } from "./paperTrader";
+import { LiveTrader } from "./liveTrader";
 
 /**
  * If Jupiter's own routed price disagrees with the on-chain-confirmed mid by more than
@@ -21,11 +22,15 @@ const JUPITER_SANITY_BPS = 2000;
 interface Candidate {
   baseMint: string;
   baseSymbol: string;
+  baseDecimals: number;
   quoteMint: string;
   quoteSymbol: string;
+  quoteDecimals: number;
   meteoraPoolAddress: string;
+  meteoraTvl: number;
   raydiumPoolId: string;
   raydiumPoolType: "Standard" | "Concentrated";
+  raydiumTvl: number;
 }
 
 function loadCandidates(): Candidate[] {
@@ -36,7 +41,7 @@ function loadCandidates(): Candidate[] {
   return candidates;
 }
 
-async function checkPair(candidate: Candidate, trader: PaperTrader, connection: Connection) {
+async function checkPair(candidate: Candidate, trader: PaperTrader, connection: Connection, liveTrader: LiveTrader | null) {
   const pairKey = `${candidate.baseSymbol}/${candidate.quoteSymbol}`;
 
   // Stage 1: cheap REST poll, just to decide whether this pair is worth a closer look.
@@ -134,6 +139,30 @@ async function checkPair(candidate: Candidate, trader: PaperTrader, connection: 
     `[fill] ${pairKey} buy=${result.buyVenue}@${result.buyFillPrice.toFixed(6)} sell=${result.sellVenue}@${result.sellFillPrice.toFixed(6)} ` +
       `netPnlBps=${result.netPnlBps.toFixed(2)} pnlUsd=${result.pnlUsd.toFixed(4)} (${jupiterNote})`
   );
+
+  // Paper simulation above always runs and always logs, independent of live trading.
+  // Real execution is a separate, additionally-gated action on the same confirmed signal.
+  if (liveTrader) {
+    await liveTrader.attemptTrade(
+      {
+        pairKey,
+        baseMint: candidate.baseMint,
+        baseSymbol: candidate.baseSymbol,
+        baseDecimals: candidate.baseDecimals,
+        quoteMint: candidate.quoteMint,
+        quoteSymbol: candidate.quoteSymbol,
+        quoteDecimals: candidate.quoteDecimals,
+        meteoraPoolAddress: candidate.meteoraPoolAddress,
+        raydiumPoolId: candidate.raydiumPoolId,
+        raydiumPoolType: candidate.raydiumPoolType,
+        buyVenue: signal.buyVenue,
+        sellVenue: signal.sellVenue,
+        meteoraTvl: candidate.meteoraTvl,
+        raydiumTvl: candidate.raydiumTvl,
+      },
+      (raw, mintA) => raydiumPriceInCanonical(raw, mintA, candidate.baseMint)
+    );
+  }
 }
 
 async function main() {
@@ -146,12 +175,30 @@ async function main() {
   console.log(`Entry threshold:   ${config.entryThresholdBps} bps + ${config.assumedRoundTripCostBps} bps assumed cost`);
   console.log(`Trade notional:    $${config.tradeNotionalUsd}`);
   console.log(`Trade cooldown:    ${config.tradeCooldownMs}ms per pair`);
-  console.log(`Paper trading only — no transactions will be sent.\n`);
+  console.log(`Paper trading:     always on, logs to ${config.tradeLogPath}\n`);
+
+  let liveTrader: LiveTrader | null = null;
+  if (isLiveTradingSafeToAttempt()) {
+    const { walletSecretKey } = requireWalletConfig();
+    const wallet = loadWallet(walletSecretKey);
+    liveTrader = new LiveTrader(connection, wallet, config.liveTradeLogPath);
+    console.log("=".repeat(60));
+    console.log(`LIVE TRADING ENABLED — real funds, real transactions.`);
+    console.log(`Wallet:            ${wallet.publicKey.toBase58()}`);
+    console.log(`Pair allowlist:    ${config.livePairAllowlist.join(", ")}`);
+    console.log(`Live notional cap: $${config.liveTradeNotionalUsd} per trade`);
+    console.log(`Daily loss cap:    $${config.liveDailyLossCapUsd}`);
+    console.log(`Max vs pool TVL:   ${config.liveMaxPositionPctOfTvl}%`);
+    console.log(`Logging to:        ${config.liveTradeLogPath}`);
+    console.log("=".repeat(60) + "\n");
+  } else {
+    console.log(`Live trading:      off (paper only) — see .env.example for LIVE_* flags\n`);
+  }
 
   setInterval(async () => {
     for (const candidate of candidates) {
       try {
-        await checkPair(candidate, trader, connection);
+        await checkPair(candidate, trader, connection, liveTrader);
       } catch (err) {
         console.error(`[error] ${candidate.baseSymbol}/${candidate.quoteSymbol}`, err);
       }

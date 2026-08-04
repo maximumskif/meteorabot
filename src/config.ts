@@ -24,7 +24,32 @@ export const config = {
   tradeCooldownMs: Number(process.env.TRADE_COOLDOWN_MS ?? 60_000),
 
   tradeLogPath: process.env.TRADE_LOG_PATH ?? "paper-trades.jsonl",
+
+  // Real-execution risk gates. ALL of these must be explicitly set before any real
+  // transaction is attempted — see requireLiveTradingConfig(). No single flag flip
+  // (not even DRY_RUN=false) is enough on its own.
+  liveTradingEnabled: (process.env.LIVE_TRADING_ENABLED ?? "false") === "true",
+  iUnderstandRealFundsAtRisk: (process.env.I_UNDERSTAND_REAL_FUNDS_AT_RISK ?? "false") === "true",
+  livePairAllowlist: (process.env.LIVE_PAIR_ALLOWLIST ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean),
+  liveTradeNotionalUsd: Number(process.env.LIVE_TRADE_NOTIONAL_USD ?? 0),
+  liveDailyLossCapUsd: Number(process.env.LIVE_DAILY_LOSS_CAP_USD ?? 0),
+  liveMaxPositionPctOfTvl: Number(process.env.LIVE_MAX_POSITION_PCT_OF_TVL ?? 1),
+  liveTradeLogPath: process.env.LIVE_TRADE_LOG_PATH ?? "real-trades.jsonl",
 };
+
+/** All must hold before any real transaction is attempted; see .env.example for what each guards against. */
+export function isLiveTradingSafeToAttempt(): boolean {
+  return (
+    config.liveTradingEnabled &&
+    config.iUnderstandRealFundsAtRisk &&
+    config.livePairAllowlist.length > 0 &&
+    config.liveTradeNotionalUsd > 0 &&
+    config.liveDailyLossCapUsd > 0
+  );
+}
 
 export function requireWalletConfig() {
   return {

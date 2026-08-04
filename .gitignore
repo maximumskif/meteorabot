@@ -3,4 +3,5 @@ dist/
 .env
 *.log
 paper-trades.jsonl
+real-trades.jsonl
 candidates.json

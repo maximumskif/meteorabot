@@ -22,8 +22,10 @@ const MAX_PLAUSIBLE_SPREAD_BPS = 2000;
 interface Candidate {
   baseMint: string;
   baseSymbol: string;
+  baseDecimals: number;
   quoteMint: string;
   quoteSymbol: string;
+  quoteDecimals: number;
   meteoraPoolAddress: string;
   meteoraTvl: number;
   meteoraPrice: number;
@@ -82,8 +84,10 @@ async function main() {
         return {
           baseMint: pool.token_x.address,
           baseSymbol: pool.token_x.symbol,
+          baseDecimals: pool.token_x.decimals,
           quoteMint: pool.token_y.address,
           quoteSymbol: pool.token_y.symbol,
+          quoteDecimals: pool.token_y.decimals,
           meteoraPoolAddress: pool.address,
           meteoraTvl: pool.tvl,
           meteoraPrice: pool.current_price,
