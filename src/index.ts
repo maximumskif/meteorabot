@@ -19,6 +19,16 @@ import { LiveTrader } from "./liveTrader";
  */
 const JUPITER_SANITY_BPS = 2000;
 
+/**
+ * Spreads wider than this survive on-chain confirmation but are still overwhelmingly
+ * data/liquidity artifacts, not real edge — confirmed live: a 3-hour run paper-filled
+ * Tokabu/SOL 59 times at 900-1800bps "spread" on an $86k-combined-TVL pump.fun token
+ * ($3,469 of $3,803 total "profit" from one bad pair), and it slipped past the Jupiter
+ * check too since Jupiter routes through the same thin pools. Matches the scanner's own
+ * plausibility cutoff — reject before even attempting a fill, paper or live.
+ */
+const MAX_PLAUSIBLE_SPREAD_BPS = 2000;
+
 interface Candidate {
   baseMint: string;
   baseSymbol: string;
@@ -95,11 +105,21 @@ async function checkPair(candidate: Candidate, trader: PaperTrader, connection: 
     return;
   }
 
+  if (Math.abs(spreadBps) > MAX_PLAUSIBLE_SPREAD_BPS) {
+    trader.markCooldown(pairKey);
+    console.log(
+      `[reject] ${pairKey} on-chain spreadBps=${spreadBps.toFixed(2)} exceeds plausibility cutoff ` +
+        `(>${MAX_PLAUSIBLE_SPREAD_BPS}bps) — almost certainly thin-liquidity/bad pricing, not real edge`
+    );
+    return;
+  }
+
   const priceOf = (venue: Venue) => (venue === "meteora" ? meteoraPrice : raydiumPrice);
   const slippage = config.slippageBps / 10_000;
   const buyFillPrice = priceOf(signal.buyVenue) * (1 + slippage);
   const sellFillPrice = priceOf(signal.sellVenue) * (1 - slippage);
 
+  let jupiterCheckPassed = false;
   let jupiterNote: string;
   try {
     const inAmountRaw = Math.round((config.tradeNotionalUsd / meteoraPool.token_x.price) * 10 ** meteoraPool.token_x.decimals);
@@ -120,6 +140,7 @@ async function checkPair(candidate: Candidate, trader: PaperTrader, connection: 
       );
       return;
     }
+    jupiterCheckPassed = true;
   } catch (err) {
     jupiterNote = `jupiter cross-check failed: ${(err as Error).message}`;
   }
@@ -141,8 +162,10 @@ async function checkPair(candidate: Candidate, trader: PaperTrader, connection: 
   );
 
   // Paper simulation above always runs and always logs, independent of live trading.
-  // Real execution is a separate, additionally-gated action on the same confirmed signal.
-  if (liveTrader) {
+  // Real execution is a separate, additionally-gated action on the same confirmed signal —
+  // and unlike paper (which logs a Jupiter fetch failure as a note and fills anyway, since
+  // it's just data), live trading fails closed: no successful Jupiter cross-check, no trade.
+  if (liveTrader && jupiterCheckPassed) {
     await liveTrader.attemptTrade(
       {
         pairKey,
@@ -162,6 +185,8 @@ async function checkPair(candidate: Candidate, trader: PaperTrader, connection: 
       },
       (raw, mintA) => raydiumPriceInCanonical(raw, mintA, candidate.baseMint)
     );
+  } else if (liveTrader && !jupiterCheckPassed) {
+    console.log(`[live-skip] ${pairKey} signal confirmed but Jupiter cross-check didn't succeed — not risking real funds on it (${jupiterNote})`);
   }
 }
 
