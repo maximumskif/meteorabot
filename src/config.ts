@@ -11,33 +11,24 @@ function required(name: string): string {
 export const config = {
   rpcUrl: process.env.RPC_URL ?? "https://api.mainnet-beta.solana.com",
   walletSecretKey: process.env.WALLET_SECRET_KEY ?? "",
-  poolAddress: process.env.POOL_ADDRESS ?? "",
   pollIntervalMs: Number(process.env.POLL_INTERVAL_MS ?? 5000),
   dryRun: (process.env.DRY_RUN ?? "true") !== "false",
 
-  cexBaseUrl: process.env.CEX_BASE_URL ?? "https://api.coinbase.com/v2/prices",
-  cexPair: process.env.CEX_PAIR ?? "SOL-USD",
+  candidatesPath: process.env.CANDIDATES_PATH ?? "candidates.json",
+  minPoolTvlUsd: Number(process.env.MIN_POOL_TVL_USD ?? 20_000),
 
   tradeNotionalUsd: Number(process.env.TRADE_NOTIONAL_USD ?? 500),
   slippageBps: Number(process.env.SLIPPAGE_BPS ?? 50),
   entryThresholdBps: Number(process.env.ENTRY_THRESHOLD_BPS ?? 25),
-  exitThresholdBps: Number(process.env.EXIT_THRESHOLD_BPS ?? 5),
-  assumedRoundTripCostBps: Number(process.env.ASSUMED_ROUND_TRIP_COST_BPS ?? 15),
-  maxHoldMs: Number(process.env.MAX_HOLD_MS ?? 5 * 60 * 1000),
+  assumedRoundTripCostBps: Number(process.env.ASSUMED_ROUND_TRIP_COST_BPS ?? 60),
+  tradeCooldownMs: Number(process.env.TRADE_COOLDOWN_MS ?? 60_000),
 
   tradeLogPath: process.env.TRADE_LOG_PATH ?? "paper-trades.jsonl",
 };
 
-export function requirePoolConfig() {
-  return {
-    ...config,
-    poolAddress: required("POOL_ADDRESS"),
-  };
-}
-
 export function requireWalletConfig() {
   return {
-    ...requirePoolConfig(),
+    ...config,
     walletSecretKey: required("WALLET_SECRET_KEY"),
   };
 }

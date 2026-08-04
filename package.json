@@ -7,7 +7,7 @@
     "start": "tsx src/index.ts",
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc --noEmit",
-    "find-pools": "tsx src/findPools.ts"
+    "scan-pairs": "tsx src/scanPairs.ts"
   },
   "dependencies": {
     "@meteora-ag/dlmm": "^1.9.14",

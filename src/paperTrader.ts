@@ -1,58 +1,70 @@
 import { appendFileSync } from "node:fs";
-import type { Side } from "./strategy";
+import type { Venue } from "./strategy";
 
-interface OpenPosition {
-  side: Side;
-  entryTime: number;
-  entryFillPrice: number;
+export interface TwoLegFill {
+  pairKey: string;
+  buyVenue: Venue;
+  sellVenue: Venue;
+  buyFillPrice: number;
+  sellFillPrice: number;
   entrySpreadBps: number;
   notionalUsd: number;
+  assumedRoundTripCostBps: number;
 }
 
+export interface TwoLegResult {
+  pairKey: string;
+  buyVenue: Venue;
+  sellVenue: Venue;
+  buyFillPrice: number;
+  sellFillPrice: number;
+  entrySpreadBps: number;
+  grossPnlBps: number;
+  netPnlBps: number;
+  pnlUsd: number;
+}
+
+/**
+ * Paper-simulates a two-leg arb: buy on the cheap venue and sell on the expensive venue
+ * at (nearly) the same time, at each venue's current quoted price. Profit is realized
+ * immediately at fill (net of assumed round-trip cost), not on later convergence — real
+ * execution still has leg risk (one side fills, price moves before the other lands) that
+ * this doesn't model; that's covered by the roadmap's risk-management/execution phases.
+ */
 export class PaperTrader {
-  private open: OpenPosition | null = null;
+  private lastTradeAt = new Map<string, number>();
 
-  constructor(private readonly logPath: string) {}
+  constructor(private readonly logPath: string, private readonly cooldownMs: number) {}
 
-  hasOpenPosition(): boolean {
-    return this.open !== null;
+  canTrade(pairKey: string): boolean {
+    const last = this.lastTradeAt.get(pairKey);
+    return last === undefined || Date.now() - last >= this.cooldownMs;
   }
 
-  getOpenPosition(): OpenPosition | null {
-    return this.open;
+  /** Start the cooldown without logging a fill — used when a signal fires but is rejected. */
+  markCooldown(pairKey: string): void {
+    this.lastTradeAt.set(pairKey, Date.now());
   }
 
-  enter(side: Side, entryFillPrice: number, entrySpreadBps: number, notionalUsd: number) {
-    this.open = { side, entryTime: Date.now(), entryFillPrice, entrySpreadBps, notionalUsd };
-    this.appendLog({ event: "enter", ...this.open });
-  }
+  fill(params: TwoLegFill): TwoLegResult {
+    const grossPnlBps = ((params.sellFillPrice - params.buyFillPrice) / params.buyFillPrice) * 10_000;
+    const netPnlBps = grossPnlBps - params.assumedRoundTripCostBps;
+    const pnlUsd = (netPnlBps / 10_000) * params.notionalUsd;
 
-  exit(exitFillPrice: number, exitSpreadBps: number, reason: "converged" | "max-hold") {
-    if (!this.open) return null;
-
-    const priceMoveBps =
-      this.open.side === "buy"
-        ? ((exitFillPrice - this.open.entryFillPrice) / this.open.entryFillPrice) * 10_000
-        : ((this.open.entryFillPrice - exitFillPrice) / this.open.entryFillPrice) * 10_000;
-    const pnlUsd = (priceMoveBps / 10_000) * this.open.notionalUsd;
-
-    const result = {
-      side: this.open.side,
-      holdMs: Date.now() - this.open.entryTime,
-      entryFillPrice: this.open.entryFillPrice,
-      exitFillPrice,
-      entrySpreadBps: this.open.entrySpreadBps,
-      exitSpreadBps,
-      pnlBps: priceMoveBps,
+    const result: TwoLegResult = {
+      pairKey: params.pairKey,
+      buyVenue: params.buyVenue,
+      sellVenue: params.sellVenue,
+      buyFillPrice: params.buyFillPrice,
+      sellFillPrice: params.sellFillPrice,
+      entrySpreadBps: params.entrySpreadBps,
+      grossPnlBps,
+      netPnlBps,
       pnlUsd,
-      reason,
     };
-    this.appendLog({ event: "exit", ...result });
-    this.open = null;
-    return result;
-  }
 
-  private appendLog(entry: Record<string, unknown>) {
-    appendFileSync(this.logPath, JSON.stringify({ time: new Date().toISOString(), ...entry }) + "\n");
+    this.lastTradeAt.set(params.pairKey, Date.now());
+    appendFileSync(this.logPath, JSON.stringify({ time: new Date().toISOString(), event: "fill", ...result }) + "\n");
+    return result;
   }
 }
