@@ -6,6 +6,18 @@ export async function loadPool(connection: Connection, poolAddress: string) {
   return DLMM.create(connection, new PublicKey(poolAddress));
 }
 
+const poolCache = new Map<string, ReturnType<typeof loadPool>>();
+
+/** Cached pool handle (pool metadata is static); callers still re-fetch getPrice() for fresh reserves. */
+export function getOrLoadPool(connection: Connection, poolAddress: string) {
+  let cached = poolCache.get(poolAddress);
+  if (!cached) {
+    cached = loadPool(connection, poolAddress);
+    poolCache.set(poolAddress, cached);
+  }
+  return cached;
+}
+
 export async function getPrice(pool: Awaited<ReturnType<typeof loadPool>>) {
   const activeBin = await pool.getActiveBin();
   return {

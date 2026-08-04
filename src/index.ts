@@ -1,19 +1,22 @@
 import { readFileSync } from "node:fs";
+import type { Connection } from "@solana/web3.js";
 import { config } from "./config";
+import { createConnection } from "./wallet";
 import { fetchPoolByAddress } from "./dex/meteoraApi";
 import { fetchPoolById } from "./dex/raydiumApi";
 import { fetchQuote } from "./dex/jupiterApi";
+import { fetchOnchainPrice } from "./dex/raydiumOnchain";
+import { getOrLoadPool, getPrice as getMeteoraOnchainPrice } from "./meteora";
 import { raydiumPriceInCanonical } from "./dex/normalize";
 import { computeSpreadBps, decideEntry, type Venue } from "./strategy";
+import { PaperTrader } from "./paperTrader";
 
 /**
- * If Jupiter's own routed price disagrees with the Meteora/Raydium mid by more than this,
- * treat the "spread" as bad/stale pricing on a thin pool rather than a real opportunity —
- * confirmed live: MIRAI/SOL fired a trade reporting +$34 "profit" while Jupiter priced it
- * 7x away from both venues' quoted prices. Matches the scanner's own plausibility cutoff.
+ * If Jupiter's own routed price disagrees with the on-chain-confirmed mid by more than
+ * this, treat the "spread" as bad pricing rather than a real opportunity. Matches the
+ * scanner's own plausibility cutoff.
  */
 const JUPITER_SANITY_BPS = 2000;
-import { PaperTrader } from "./paperTrader";
 
 interface Candidate {
   baseMint: string;
@@ -22,6 +25,7 @@ interface Candidate {
   quoteSymbol: string;
   meteoraPoolAddress: string;
   raydiumPoolId: string;
+  raydiumPoolType: "Standard" | "Concentrated";
 }
 
 function loadCandidates(): Candidate[] {
@@ -32,9 +36,13 @@ function loadCandidates(): Candidate[] {
   return candidates;
 }
 
-async function checkPair(candidate: Candidate, trader: PaperTrader) {
+async function checkPair(candidate: Candidate, trader: PaperTrader, connection: Connection) {
   const pairKey = `${candidate.baseSymbol}/${candidate.quoteSymbol}`;
 
+  // Stage 1: cheap REST poll, just to decide whether this pair is worth a closer look.
+  // Both dlmm.datapi.meteora.ag and api-v3.raydium.io are indexer/cache layers that were
+  // confirmed live to return bit-for-bit identical prices across 2+ minutes of polling —
+  // fine for "is there possibly something here", not trustworthy enough to fire a trade on.
   const [meteoraPool, raydiumPool] = await Promise.all([
     fetchPoolByAddress(candidate.meteoraPoolAddress),
     fetchPoolById(candidate.raydiumPoolId),
@@ -44,18 +52,43 @@ async function checkPair(candidate: Candidate, trader: PaperTrader) {
     return;
   }
 
-  const meteoraPrice = meteoraPool.current_price;
-  const raydiumPrice = raydiumPriceInCanonical(raydiumPool.price, raydiumPool.mintA.address, candidate.baseMint);
-  const spreadBps = computeSpreadBps(meteoraPrice, raydiumPrice);
+  const restMeteoraPrice = meteoraPool.current_price;
+  const restRaydiumPrice = raydiumPriceInCanonical(raydiumPool.price, raydiumPool.mintA.address, candidate.baseMint);
+  const restSpreadBps = computeSpreadBps(restMeteoraPrice, restRaydiumPrice);
 
   console.log(
-    `[tick] ${pairKey} meteora=${meteoraPrice.toFixed(6)} raydium=${raydiumPrice.toFixed(6)} spreadBps=${spreadBps.toFixed(2)}`
+    `[tick] ${pairKey} meteora=${restMeteoraPrice.toFixed(6)} raydium=${restRaydiumPrice.toFixed(6)} spreadBps=${restSpreadBps.toFixed(2)}`
   );
 
   if (!trader.canTrade(pairKey)) return;
+  if (decideEntry(restSpreadBps, config.entryThresholdBps, config.assumedRoundTripCostBps, config.slippageBps) === "hold") return;
 
+  // Stage 2: fresh on-chain RPC read on both venues before trusting the REST-detected signal.
+  let meteoraPrice: number;
+  let raydiumPrice: number;
+  try {
+    const [meteoraPoolOnchain, raydiumRaw] = await Promise.all([
+      getOrLoadPool(connection, candidate.meteoraPoolAddress).then(getMeteoraOnchainPrice),
+      fetchOnchainPrice(connection, candidate.raydiumPoolId, candidate.raydiumPoolType),
+    ]);
+    meteoraPrice = meteoraPoolOnchain.price;
+    raydiumPrice = raydiumPriceInCanonical(raydiumRaw, raydiumPool.mintA.address, candidate.baseMint);
+  } catch (err) {
+    trader.markCooldown(pairKey);
+    console.log(`[reject] ${pairKey} on-chain confirmation failed: ${(err as Error).message}`);
+    return;
+  }
+
+  const spreadBps = computeSpreadBps(meteoraPrice, raydiumPrice);
   const signal = decideEntry(spreadBps, config.entryThresholdBps, config.assumedRoundTripCostBps, config.slippageBps);
-  if (signal === "hold") return;
+  if (signal === "hold") {
+    trader.markCooldown(pairKey);
+    console.log(
+      `[reject] ${pairKey} REST spreadBps=${restSpreadBps.toFixed(2)} but fresh on-chain spreadBps=${spreadBps.toFixed(2)} ` +
+        `no longer clears threshold — REST data was stale`
+    );
+    return;
+  }
 
   const priceOf = (venue: Venue) => (venue === "meteora" ? meteoraPrice : raydiumPrice);
   const slippage = config.slippageBps / 10_000;
@@ -78,7 +111,7 @@ async function checkPair(candidate: Candidate, trader: PaperTrader) {
       trader.markCooldown(pairKey);
       console.log(
         `[reject] ${pairKey} spreadBps=${spreadBps.toFixed(2)} but Jupiter disagrees by ${jupiterDeviationBps.toFixed(0)}bps ` +
-          `(${jupiterNote}) — likely stale/thin pricing, not a real trade`
+          `(${jupiterNote}) — likely bad pricing, not a real trade`
       );
       return;
     }
@@ -105,9 +138,11 @@ async function checkPair(candidate: Candidate, trader: PaperTrader) {
 
 async function main() {
   const candidates = loadCandidates();
+  const connection = createConnection(config.rpcUrl);
   const trader = new PaperTrader(config.tradeLogPath, config.tradeCooldownMs);
 
   console.log(`Monitoring ${candidates.length} pairs from ${config.candidatesPath}`);
+  console.log(`RPC:               ${config.rpcUrl} (only used to confirm signals, not per-tick)`);
   console.log(`Entry threshold:   ${config.entryThresholdBps} bps + ${config.assumedRoundTripCostBps} bps assumed cost`);
   console.log(`Trade notional:    $${config.tradeNotionalUsd}`);
   console.log(`Trade cooldown:    ${config.tradeCooldownMs}ms per pair`);
@@ -116,7 +151,7 @@ async function main() {
   setInterval(async () => {
     for (const candidate of candidates) {
       try {
-        await checkPair(candidate, trader);
+        await checkPair(candidate, trader, connection);
       } catch (err) {
         console.error(`[error] ${candidate.baseSymbol}/${candidate.quoteSymbol}`, err);
       }

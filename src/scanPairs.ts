@@ -28,6 +28,7 @@ interface Candidate {
   meteoraTvl: number;
   meteoraPrice: number;
   raydiumPoolId: string;
+  raydiumPoolType: "Standard" | "Concentrated";
   raydiumTvl: number;
   raydiumPrice: number;
   combinedTvl: number;
@@ -87,6 +88,7 @@ async function main() {
           meteoraTvl: pool.tvl,
           meteoraPrice: pool.current_price,
           raydiumPoolId: raydiumPool.id,
+          raydiumPoolType: raydiumPool.type,
           raydiumTvl: raydiumPool.tvl,
           raydiumPrice,
           combinedTvl: pool.tvl + raydiumPool.tvl,
