@@ -39,13 +39,30 @@ independent liquidity).
    `@raydium-io/raydium-sdk-v2` — AMM and CLMM pools both handled). If the
    spread doesn't survive that fresh read, it's rejected as stale REST data,
    not filled.
-4. If it survives, cross-check against a live Jupiter quote and reject if
-   Jupiter disagrees sharply (`JUPITER_SANITY_BPS`) — caught a pair reporting
-   a fake profit from bad pricing on a thin pool during testing. Otherwise
-   paper-fill both legs immediately (buy cheap venue, sell expensive venue) —
-   profit is realized at fill, not on later convergence. A per-pair
-   `TRADE_COOLDOWN_MS` prevents re-triggering on noisy consecutive ticks.
-5. Log every fill to a JSONL trade log (`src/paperTrader.ts`).
+4. If it survives, get a **real depth-aware quote for the configured
+   `TRADE_NOTIONAL_USD`** against each actual venue — Meteora's DLMM
+   `swapQuote`, Raydium's AMM/CLMM swap simulation (both venues' quote logic
+   is shared with the real-execution code in `src/dex/raydiumSwap.ts`, so
+   there's one implementation, not two that could drift apart) — chained
+   leg-to-leg exactly like a real trade (leg 2's input is leg 1's real
+   output). Reject if the real fill, after real price impact, doesn't clear
+   costs. This replaced a flat assumed-slippage estimate that didn't account
+   for pool depth at all — confirmed live: a $500 quote against a pool right
+   at `MIN_POOL_TVL_USD` showed 20-49x more real price impact than assumed,
+   and in one 6-minute run *every* paper fill (12/12) came from two pairs
+   whose spread never actually moved because nobody was trading against
+   them — the flat-slippage model made a persistent, untradeable price gap
+   look like repeatable profit.
+5. Cross-check against a live Jupiter quote too and reject if Jupiter
+   disagrees sharply (`JUPITER_SANITY_BPS`) — a different, complementary
+   signal from step 4: Jupiter can route through venues other than our
+   specific Meteora/Raydium pools, so it catches bad *general market*
+   pricing that a same-venue depth quote wouldn't. Otherwise paper-fill both
+   legs immediately (buy cheap venue, sell expensive venue) at the real
+   quoted prices from step 4 — profit is realized at fill, not on later
+   convergence. A per-pair `TRADE_COOLDOWN_MS` prevents re-triggering on
+   noisy consecutive ticks.
+6. Log every fill to a JSONL trade log (`src/paperTrader.ts`).
 
 ## Real execution (real funds — read this before touching it)
 
@@ -101,8 +118,8 @@ npm start                  # or: npm run dev (watch mode)
 | `src/alerts.ts` | optional Discord webhook alerts for real-money events |
 | `src/dex/meteoraApi.ts` | Meteora DLMM pool discovery + price (REST, `dlmm.datapi.meteora.ag`) |
 | `src/dex/raydiumApi.ts` | Raydium pool discovery + price (REST, `api-v3.raydium.io`) |
-| `src/dex/raydiumOnchain.ts` | Raydium on-chain price reads (RPC, via `@raydium-io/raydium-sdk-v2`) — signal confirmation |
-| `src/dex/raydiumSwap.ts` | Raydium on-chain swap building/sending (AMM + CLMM), real execution |
+| `src/dex/raydiumOnchain.ts` | Raydium on-chain price reads + depth-aware quotes (RPC, via `@raydium-io/raydium-sdk-v2`) — signal confirmation and pre-fill sizing |
+| `src/dex/raydiumSwap.ts` | Raydium on-chain swap building/sending (AMM + CLMM), real execution — quote logic shared with `raydiumOnchain.ts`'s pre-fill check |
 | `src/dex/jupiterApi.ts` | Jupiter price/quote, used as a cross-check only |
 | `src/dex/normalize.ts` | reorients Raydium's price to a common base/quote convention |
 | `src/scanPairs.ts` | cross-DEX pair discovery, writes `candidates.json` |

@@ -30,21 +30,22 @@ function getOwnerRaydium(connection: Connection, owner: Keypair): Promise<Raydiu
   return cached;
 }
 
-/** Builds (but does not send) a swap on an AMM v4 ("Standard") Raydium pool. */
-export async function buildStandardSwap(
-  connection: Connection,
-  owner: Keypair,
+/**
+ * Pure quote (poolInfo + reserves + computed amountOut) — no owner needed, just reads +
+ * local computation. Shared by the real tx-building path below and the depth-aware
+ * pre-check quote (src/dex/raydiumOnchain.ts's quoteRaydiumFill) so both use the exact
+ * same simulation logic instead of two implementations that could silently drift apart.
+ */
+export async function computeStandardSwapQuote(
+  raydium: Raydium,
   poolId: string,
   inputMint: string,
   outputMint: string,
   amountIn: BN,
   slippage: number
-): Promise<MakeTxData<TxVersion.LEGACY>> {
-  const raydium = await getOwnerRaydium(connection, owner);
-
+) {
   const poolData = await raydium.api.fetchPoolById({ ids: poolId });
   const poolInfo = poolData[0] as ApiV3PoolInfoStandardItem;
-  const poolKeys = await raydium.liquidity.getAmmPoolKeys(poolId);
   const rpcData = await raydium.liquidity.getRpcPoolInfo(poolId);
 
   const out = raydium.liquidity.computeAmountOut({
@@ -60,6 +61,23 @@ export async function buildStandardSwap(
     mintOut: outputMint,
     slippage,
   });
+
+  return { poolInfo, out };
+}
+
+/** Builds (but does not send) a swap on an AMM v4 ("Standard") Raydium pool. */
+export async function buildStandardSwap(
+  connection: Connection,
+  owner: Keypair,
+  poolId: string,
+  inputMint: string,
+  outputMint: string,
+  amountIn: BN,
+  slippage: number
+): Promise<MakeTxData<TxVersion.LEGACY>> {
+  const raydium = await getOwnerRaydium(connection, owner);
+  const { poolInfo, out } = await computeStandardSwapQuote(raydium, poolId, inputMint, outputMint, amountIn, slippage);
+  const poolKeys = await raydium.liquidity.getAmmPoolKeys(poolId);
 
   return raydium.liquidity.swap({
     poolInfo,
@@ -87,16 +105,13 @@ export async function swapStandard(
   return { txId };
 }
 
-/** Builds (but does not send) a swap on a Concentrated (CLMM) Raydium pool. */
-export async function buildConcentratedSwap(
-  connection: Connection,
-  owner: Keypair,
-  poolId: string,
-  inputMint: string,
-  amountIn: BN,
-  slippageBps: number
-): Promise<MakeTxData<TxVersion.LEGACY>> {
-  const raydium = await getOwnerRaydium(connection, owner);
+/**
+ * Pure simulation — no owner needed, just reads + local computation. Shared by the real
+ * tx-building path below and the depth-aware pre-check quote (src/dex/raydiumOnchain.ts's
+ * quoteRaydiumFill) so both use the exact same simulation logic instead of two
+ * implementations that could silently drift apart.
+ */
+export async function simulateConcentratedSwap(connection: Connection, raydium: Raydium, poolId: string, inputMint: string, amountIn: BN) {
   const poolIdPub = new PublicKey(poolId);
 
   // zeroForOne (input is mintA vs mintB) must be known before fetching direction-specific
@@ -127,6 +142,21 @@ export async function buildConcentratedSwap(
     blockTimestamp: Math.floor(Date.now() / 1000),
     includeExtraTickArrays: true,
   });
+
+  return { simulation, poolInfo, rpcData };
+}
+
+/** Builds (but does not send) a swap on a Concentrated (CLMM) Raydium pool. */
+export async function buildConcentratedSwap(
+  connection: Connection,
+  owner: Keypair,
+  poolId: string,
+  inputMint: string,
+  amountIn: BN,
+  slippageBps: number
+): Promise<MakeTxData<TxVersion.LEGACY>> {
+  const raydium = await getOwnerRaydium(connection, owner);
+  const { simulation, poolInfo, rpcData } = await simulateConcentratedSwap(connection, raydium, poolId, inputMint, amountIn);
 
   // swapInternal's amountCalculated is the raw simulated output with no slippage buffer —
   // apply configured slippage ourselves so the tx has room to land instead of reverting on

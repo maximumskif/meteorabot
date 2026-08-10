@@ -1,12 +1,13 @@
 import { readFileSync } from "node:fs";
 import type { Connection } from "@solana/web3.js";
+import BN from "bn.js";
 import { config, isLiveTradingSafeToAttempt, isUsingDefaultPublicRpc, requireWalletConfig } from "./config";
 import { createConnection, loadWallet } from "./wallet";
 import { fetchPoolByAddress } from "./dex/meteoraApi";
 import { fetchPoolById } from "./dex/raydiumApi";
 import { fetchQuote } from "./dex/jupiterApi";
-import { fetchOnchainPrice } from "./dex/raydiumOnchain";
-import { getOrLoadPool, getPrice as getMeteoraOnchainPrice } from "./meteora";
+import { fetchOnchainPrice, quoteRaydiumFill } from "./dex/raydiumOnchain";
+import { getOrLoadPool, getPrice as getMeteoraOnchainPrice, quoteSwap } from "./meteora";
 import { raydiumPriceInCanonical } from "./dex/normalize";
 import { computeSpreadBps, decideEntry, type Venue } from "./strategy";
 import { PaperTrader } from "./paperTrader";
@@ -41,6 +42,25 @@ interface Candidate {
   raydiumPoolId: string;
   raydiumPoolType: "Standard" | "Concentrated";
   raydiumTvl: number;
+}
+
+/** Quotes one leg's real output against the actual venue/pool — no flat assumed slippage, real depth-aware pricing (Meteora's DLMM swapQuote, Raydium's AMM/CLMM simulation). */
+async function quoteLegOut(
+  connection: Connection,
+  candidate: Candidate,
+  venue: Venue,
+  direction: "quote-to-base" | "base-to-quote",
+  amountIn: BN
+): Promise<BN> {
+  if (venue === "meteora") {
+    const pool = await getOrLoadPool(connection, candidate.meteoraPoolAddress);
+    const swapForY = direction === "base-to-quote";
+    const quote = await quoteSwap(pool, amountIn, swapForY, config.slippageBps);
+    return quote.outAmount;
+  }
+  const inputMint = direction === "quote-to-base" ? candidate.quoteMint : candidate.baseMint;
+  const outputMint = direction === "quote-to-base" ? candidate.baseMint : candidate.quoteMint;
+  return quoteRaydiumFill(connection, candidate.raydiumPoolId, candidate.raydiumPoolType, inputMint, outputMint, amountIn);
 }
 
 function loadCandidates(): Candidate[] {
@@ -114,10 +134,41 @@ async function checkPair(candidate: Candidate, trader: PaperTrader, connection: 
     return;
   }
 
-  const priceOf = (venue: Venue) => (venue === "meteora" ? meteoraPrice : raydiumPrice);
-  const slippage = config.slippageBps / 10_000;
-  const buyFillPrice = priceOf(signal.buyVenue) * (1 + slippage);
-  const sellFillPrice = priceOf(signal.sellVenue) * (1 - slippage);
+  // Stage 3: real depth-aware quote for the actual configured notional against the actual
+  // venues, chained leg-to-leg exactly like a real trade (leg 2's input is leg 1's output).
+  // A spot-price spread can look profitable while the configured notional eats itself in
+  // price impact alone on a thin pool — confirmed live: a $500 fill against a pool barely
+  // above MIN_POOL_TVL_USD showed 20%+ real price impact vs. the flat ~0.5% SLIPPAGE_BPS
+  // this used to assume for every pool regardless of depth, and every single paper fill in
+  // a 6-minute run came from two such pairs whose "spread" never actually moved.
+  const quoteUsdPrice = meteoraPool.token_y.price;
+  const quoteAmountRaw = new BN(Math.round((config.tradeNotionalUsd / quoteUsdPrice) * 10 ** candidate.quoteDecimals));
+
+  let baseReceivedRaw: BN;
+  let quoteReceivedRaw: BN;
+  try {
+    baseReceivedRaw = await quoteLegOut(connection, candidate, signal.buyVenue, "quote-to-base", quoteAmountRaw);
+    quoteReceivedRaw = await quoteLegOut(connection, candidate, signal.sellVenue, "base-to-quote", baseReceivedRaw);
+  } catch (err) {
+    trader.markCooldown(pairKey);
+    console.log(`[reject] ${pairKey} depth-aware quote failed: ${(err as Error).message}`);
+    return;
+  }
+
+  const baseReceivedHuman = Number(baseReceivedRaw.toString()) / 10 ** candidate.baseDecimals;
+  const buyFillPrice = Number(quoteAmountRaw.toString()) / 10 ** candidate.quoteDecimals / baseReceivedHuman;
+  const sellFillPrice = Number(quoteReceivedRaw.toString()) / 10 ** candidate.quoteDecimals / baseReceivedHuman;
+
+  const realGrossPnlBps = ((sellFillPrice - buyFillPrice) / buyFillPrice) * 10_000;
+  const realNetPnlBps = realGrossPnlBps - config.assumedRoundTripCostBps;
+  if (realNetPnlBps <= 0) {
+    trader.markCooldown(pairKey);
+    console.log(
+      `[reject] ${pairKey} spot spreadBps=${spreadBps.toFixed(2)} but a real depth-aware $${config.tradeNotionalUsd} fill ` +
+        `nets ${realNetPnlBps.toFixed(2)}bps after price impact — the spread wasn't really tradeable at this size`
+    );
+    return;
+  }
 
   let jupiterCheckPassed = false;
   let jupiterNote: string;
