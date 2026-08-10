@@ -121,8 +121,11 @@ npm start                  # or: npm run dev (watch mode)
    moment, not something this build should do on its own).
 5. Operational hardening — retry/backoff, alerting, a dedicated RPC provider
    (the public endpoint is fine for on-signal confirmation calls today, but
-   will need replacing once execution needs lower latency/higher reliability),
-   persisting the daily loss cap across restarts (currently in-memory only).
+   will need replacing once execution needs lower latency/higher reliability).
+   ~~Persist the daily loss cap across restarts~~ — done: `LiveTrader` now
+   loads/saves today's realized P&L to `LIVE_DAILY_PNL_STATE_PATH`
+   (`live-daily-pnl.json` by default) on every fill and day rollover, so a
+   crash or restart mid-day doesn't quietly reopen the cap.
 
 ## Notes
 

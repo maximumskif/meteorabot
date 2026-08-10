@@ -206,7 +206,7 @@ async function main() {
   if (isLiveTradingSafeToAttempt()) {
     const { walletSecretKey } = requireWalletConfig();
     const wallet = loadWallet(walletSecretKey);
-    liveTrader = new LiveTrader(connection, wallet, config.liveTradeLogPath);
+    liveTrader = new LiveTrader(connection, wallet, config.liveTradeLogPath, config.liveDailyPnlStatePath);
     console.log("=".repeat(60));
     console.log(`LIVE TRADING ENABLED — real funds, real transactions.`);
     console.log(`Wallet:            ${wallet.publicKey.toBase58()}`);
@@ -215,6 +215,7 @@ async function main() {
     console.log(`Daily loss cap:    $${config.liveDailyLossCapUsd}`);
     console.log(`Max vs pool TVL:   ${config.liveMaxPositionPctOfTvl}%`);
     console.log(`Logging to:        ${config.liveTradeLogPath}`);
+    console.log(`Daily P&L state:   ${config.liveDailyPnlStatePath} (realized so far today: $${liveTrader.getDailyRealizedPnlUsd().toFixed(2)})`);
     console.log("=".repeat(60) + "\n");
   } else {
     console.log(`Live trading:      off (paper only) — see .env.example for LIVE_* flags\n`);

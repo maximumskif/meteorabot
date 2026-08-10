@@ -38,6 +38,7 @@ export const config = {
   liveDailyLossCapUsd: Number(process.env.LIVE_DAILY_LOSS_CAP_USD ?? 0),
   liveMaxPositionPctOfTvl: Number(process.env.LIVE_MAX_POSITION_PCT_OF_TVL ?? 1),
   liveTradeLogPath: process.env.LIVE_TRADE_LOG_PATH ?? "real-trades.jsonl",
+  liveDailyPnlStatePath: process.env.LIVE_DAILY_PNL_STATE_PATH ?? "live-daily-pnl.json",
 };
 
 /** All must hold before any real transaction is attempted; see .env.example for what each guards against. */

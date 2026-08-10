@@ -5,3 +5,4 @@ dist/
 paper-trades.jsonl
 real-trades.jsonl
 candidates.json
+live-daily-pnl.json

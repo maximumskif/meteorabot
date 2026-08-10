@@ -1,4 +1,4 @@
-import { appendFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { Connection, Keypair, PublicKey } from "@solana/web3.js";
 import { getAssociatedTokenAddress } from "@solana/spl-token";
 import BN from "bn.js";
@@ -71,20 +71,46 @@ export class LiveTrader {
   constructor(
     private readonly connection: Connection,
     private readonly wallet: Keypair,
-    private readonly logPath: string
-  ) {}
+    private readonly logPath: string,
+    private readonly dailyPnlStatePath: string
+  ) {
+    this.loadDailyPnlState();
+  }
+
+  /** Restores today's realized P&L from disk so a restart doesn't quietly reopen the daily loss cap. Anything from a prior day is treated as stale and ignored — rolloverDayIfNeeded's usual logic. */
+  private loadDailyPnlState() {
+    if (!existsSync(this.dailyPnlStatePath)) return;
+    try {
+      const state = JSON.parse(readFileSync(this.dailyPnlStatePath, "utf8")) as { date: string; dailyRealizedPnlUsd: number };
+      if (state.date === this.dailyResetAt) {
+        this.dailyRealizedPnlUsd = state.dailyRealizedPnlUsd;
+      }
+    } catch (err) {
+      console.error(`Failed to load ${this.dailyPnlStatePath}, starting today's P&L at $0: ${(err as Error).message}`);
+    }
+  }
+
+  private saveDailyPnlState() {
+    writeFileSync(this.dailyPnlStatePath, JSON.stringify({ date: this.dailyResetAt, dailyRealizedPnlUsd: this.dailyRealizedPnlUsd }));
+  }
 
   private rolloverDayIfNeeded() {
     const today = new Date().toDateString();
     if (today !== this.dailyResetAt) {
       this.dailyResetAt = today;
       this.dailyRealizedPnlUsd = 0;
+      this.saveDailyPnlState();
     }
   }
 
   dailyLossCapBreached(): boolean {
     this.rolloverDayIfNeeded();
     return -this.dailyRealizedPnlUsd >= config.liveDailyLossCapUsd;
+  }
+
+  getDailyRealizedPnlUsd(): number {
+    this.rolloverDayIfNeeded();
+    return this.dailyRealizedPnlUsd;
   }
 
   private log(entry: Record<string, unknown>) {
@@ -230,6 +256,7 @@ export class LiveTrader {
       ((Number(quoteReceived.toString()) - Number(quoteAmountRaw.toString())) / 10 ** params.quoteDecimals) * quoteUsdPrice;
 
     this.dailyRealizedPnlUsd += pnlUsd;
+    this.saveDailyPnlState();
 
     this.log({
       event: "fill",
