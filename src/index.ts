@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import type { Connection } from "@solana/web3.js";
-import { config, isLiveTradingSafeToAttempt, requireWalletConfig } from "./config";
+import { config, isLiveTradingSafeToAttempt, isUsingDefaultPublicRpc, requireWalletConfig } from "./config";
 import { createConnection, loadWallet } from "./wallet";
 import { fetchPoolByAddress } from "./dex/meteoraApi";
 import { fetchPoolById } from "./dex/raydiumApi";
@@ -216,6 +216,13 @@ async function main() {
     console.log(`Max vs pool TVL:   ${config.liveMaxPositionPctOfTvl}%`);
     console.log(`Logging to:        ${config.liveTradeLogPath}`);
     console.log(`Daily P&L state:   ${config.liveDailyPnlStatePath} (realized so far today: $${liveTrader.getDailyRealizedPnlUsd().toFixed(2)})`);
+    if (isUsingDefaultPublicRpc()) {
+      console.log(
+        `WARNING:           RPC_URL is still the shared public endpoint (api.mainnet-beta.solana.com) — ` +
+          `rate-limited and unreliable under load. Get a dedicated endpoint (Helius/Triton/QuickNode) ` +
+          `before trading real size; see .env.example.`
+      );
+    }
     console.log("=".repeat(60) + "\n");
   } else {
     console.log(`Live trading:      off (paper only) — see .env.example for LIVE_* flags\n`);

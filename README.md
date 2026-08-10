@@ -68,6 +68,12 @@ trade is ever attempted (`src/liveTrader.ts`, config in `.env.example`):
    the thinner pool's depth, independent of the flat notional cap.
 6. A pre-trade balance check (input token + a SOL fee buffer) fails closed —
    skips rather than attempts-and-errors if the wallet can't cover it.
+7. **`RPC_URL` should be a dedicated endpoint, not the shared public one** —
+   not independently enforced (any URL is technically valid), but the app
+   prints a startup warning if live trading is on and `RPC_URL` is still
+   `api.mainnet-beta.solana.com`. It's rate-limited and shared with the
+   world; real execution needs lower latency/higher reliability than that.
+   See `.env.example` for provider options.
 
 Even with all of that: **leg risk is real and only partially mitigated.** A
 "trade" is two separate transactions (buy venue, then sell venue), not one
@@ -121,9 +127,12 @@ npm start                  # or: npm run dev (watch mode)
    re-check but not eliminated — see "Real execution" above. Not yet done: an actual
    live trade with real funds (deliberately not automated — a decision to make in the
    moment, not something this build should do on its own).
-5. Operational hardening — alerting, a dedicated RPC provider (the public
-   endpoint is fine for on-signal confirmation calls today, but will need
-   replacing once execution needs lower latency/higher reliability).
+5. Operational hardening — alerting is the remaining piece.
+   ~~Dedicated RPC provider~~ — `RPC_URL` was already env-driven; added a
+   startup warning when live trading is on and it's still the shared public
+   endpoint, plus provider guidance in `.env.example`. Not a hard-enforced
+   gate (any URL passes), since the app can't tell a dedicated endpoint from
+   a public one by URL shape alone.
    ~~Persist the daily loss cap across restarts~~ — done: `LiveTrader` now
    loads/saves today's realized P&L to `LIVE_DAILY_PNL_STATE_PATH`
    (`live-daily-pnl.json` by default) on every fill and day rollover, so a

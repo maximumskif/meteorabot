@@ -8,8 +8,10 @@ function required(name: string): string {
   return value;
 }
 
+const DEFAULT_PUBLIC_RPC_URL = "https://api.mainnet-beta.solana.com";
+
 export const config = {
-  rpcUrl: process.env.RPC_URL ?? "https://api.mainnet-beta.solana.com",
+  rpcUrl: process.env.RPC_URL ?? DEFAULT_PUBLIC_RPC_URL,
   walletSecretKey: process.env.WALLET_SECRET_KEY ?? "",
   pollIntervalMs: Number(process.env.POLL_INTERVAL_MS ?? 5000),
   dryRun: (process.env.DRY_RUN ?? "true") !== "false",
@@ -40,6 +42,11 @@ export const config = {
   liveTradeLogPath: process.env.LIVE_TRADE_LOG_PATH ?? "real-trades.jsonl",
   liveDailyPnlStatePath: process.env.LIVE_DAILY_PNL_STATE_PATH ?? "live-daily-pnl.json",
 };
+
+/** Not a hard gate (any non-default URL passes) — just flags the specific known-shared, rate-limited public endpoint so a live-trading warning can point at it. */
+export function isUsingDefaultPublicRpc(): boolean {
+  return config.rpcUrl === DEFAULT_PUBLIC_RPC_URL;
+}
 
 /** All must hold before any real transaction is attempted; see .env.example for what each guards against. */
 export function isLiveTradingSafeToAttempt(): boolean {
