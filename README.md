@@ -90,6 +90,8 @@ npm start                  # or: npm run dev (watch mode)
 | File | Purpose |
 |---|---|
 | `src/config.ts` | env-driven config |
+| `src/retry.ts` | exponential backoff + jitter for retryable read-only calls |
+| `src/dex/httpJson.ts` | fetch+parse-JSON with retry, shared by the REST API modules |
 | `src/dex/meteoraApi.ts` | Meteora DLMM pool discovery + price (REST, `dlmm.datapi.meteora.ag`) |
 | `src/dex/raydiumApi.ts` | Raydium pool discovery + price (REST, `api-v3.raydium.io`) |
 | `src/dex/raydiumOnchain.ts` | Raydium on-chain price reads (RPC, via `@raydium-io/raydium-sdk-v2`) — signal confirmation |
@@ -119,13 +121,20 @@ npm start                  # or: npm run dev (watch mode)
    re-check but not eliminated — see "Real execution" above. Not yet done: an actual
    live trade with real funds (deliberately not automated — a decision to make in the
    moment, not something this build should do on its own).
-5. Operational hardening — retry/backoff, alerting, a dedicated RPC provider
-   (the public endpoint is fine for on-signal confirmation calls today, but
-   will need replacing once execution needs lower latency/higher reliability).
+5. Operational hardening — alerting, a dedicated RPC provider (the public
+   endpoint is fine for on-signal confirmation calls today, but will need
+   replacing once execution needs lower latency/higher reliability).
    ~~Persist the daily loss cap across restarts~~ — done: `LiveTrader` now
    loads/saves today's realized P&L to `LIVE_DAILY_PNL_STATE_PATH`
    (`live-daily-pnl.json` by default) on every fill and day rollover, so a
    crash or restart mid-day doesn't quietly reopen the cap.
+   ~~Retry/backoff~~ — done: `src/retry.ts` wraps REST calls
+   (Meteora/Raydium/Jupiter, via `src/dex/httpJson.ts`) and on-chain
+   signal-confirmation reads (Meteora `getActiveBin`, Raydium RPC pool info)
+   with exponential backoff + jitter on transient failures, so one blip
+   doesn't reject a real signal the same as "no edge here." Never wraps
+   transaction sends (leg execution) — retrying a submitted-but-unconfirmed
+   swap risks double-sending.
 
 ## Notes
 
