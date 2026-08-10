@@ -1,3 +1,5 @@
+import { fetchJson } from "./httpJson";
+
 const BASE_URL = "https://api-v3.raydium.io";
 
 export interface RaydiumMint {
@@ -31,11 +33,7 @@ export async function fetchPoolsByMints(mint1: string, mint2: string, pageSize =
     pageSize: String(pageSize),
     page: "1",
   });
-  const res = await fetch(`${BASE_URL}/pools/info/mint?${params.toString()}`);
-  if (!res.ok) {
-    throw new Error(`Raydium pools fetch failed: ${res.status} ${res.statusText}`);
-  }
-  const json = (await res.json()) as RaydiumMintPoolsResponse;
+  const json = await fetchJson<RaydiumMintPoolsResponse>(`${BASE_URL}/pools/info/mint?${params.toString()}`, "Raydium pools fetch");
   return json.data.data;
 }
 
@@ -46,10 +44,6 @@ interface RaydiumPoolByIdResponse {
 
 /** Single pool by its id, for cheap live price polling (no RPC needed). */
 export async function fetchPoolById(id: string): Promise<RaydiumPool | undefined> {
-  const res = await fetch(`${BASE_URL}/pools/info/ids?ids=${id}`);
-  if (!res.ok) {
-    throw new Error(`Raydium pool fetch failed: ${res.status} ${res.statusText}`);
-  }
-  const json = (await res.json()) as RaydiumPoolByIdResponse;
+  const json = await fetchJson<RaydiumPoolByIdResponse>(`${BASE_URL}/pools/info/ids?ids=${id}`, "Raydium pool fetch");
   return json.data[0];
 }

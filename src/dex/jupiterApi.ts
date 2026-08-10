@@ -1,3 +1,5 @@
+import { fetchJson } from "./httpJson";
+
 const BASE_URL = "https://lite-api.jup.ag";
 
 interface JupiterPriceV3Entry {
@@ -8,11 +10,7 @@ interface JupiterPriceV3Entry {
 
 /** Lightweight USD price per mint (no full swap route). */
 export async function fetchPriceV3(mints: string[]): Promise<Record<string, JupiterPriceV3Entry>> {
-  const res = await fetch(`${BASE_URL}/price/v3?ids=${mints.join(",")}`);
-  if (!res.ok) {
-    throw new Error(`Jupiter price fetch failed: ${res.status} ${res.statusText}`);
-  }
-  return res.json() as Promise<Record<string, JupiterPriceV3Entry>>;
+  return fetchJson<Record<string, JupiterPriceV3Entry>>(`${BASE_URL}/price/v3?ids=${mints.join(",")}`, "Jupiter price fetch");
 }
 
 export interface JupiterQuote {
@@ -38,9 +36,5 @@ export async function fetchQuote(
   if (opts.excludeDexes?.length) {
     params.set("excludeDexes", opts.excludeDexes.join(","));
   }
-  const res = await fetch(`${BASE_URL}/swap/v1/quote?${params.toString()}`);
-  if (!res.ok) {
-    throw new Error(`Jupiter quote fetch failed: ${res.status} ${res.statusText}`);
-  }
-  return res.json() as Promise<JupiterQuote>;
+  return fetchJson<JupiterQuote>(`${BASE_URL}/swap/v1/quote?${params.toString()}`, "Jupiter quote fetch");
 }

@@ -3,7 +3,7 @@ import { Connection, Keypair, PublicKey } from "@solana/web3.js";
 import { getAssociatedTokenAddress } from "@solana/spl-token";
 import BN from "bn.js";
 import { config } from "./config";
-import { getOrLoadPool, quoteSwap, executeSwap as executeMeteoraSwap } from "./meteora";
+import { getOrLoadPool, getPrice as getMeteoraPrice, quoteSwap, executeSwap as executeMeteoraSwap } from "./meteora";
 import { swapStandard, swapConcentrated } from "./dex/raydiumSwap";
 import { fetchPriceV3 } from "./dex/jupiterApi";
 import { computeSpreadBps, type Venue } from "./strategy";
@@ -50,8 +50,7 @@ async function getVenuePrice(
 ): Promise<number> {
   if (venue === "meteora") {
     const pool = await getOrLoadPool(connection, params.meteoraPoolAddress);
-    const bin = await pool.getActiveBin();
-    return Number(bin.pricePerToken);
+    return (await getMeteoraPrice(pool)).price;
   }
   const { fetchOnchainPrice } = await import("./dex/raydiumOnchain");
   const raw = await fetchOnchainPrice(connection, params.raydiumPoolId, params.raydiumPoolType);

@@ -1,3 +1,5 @@
+import { fetchJson } from "./httpJson";
+
 const BASE_URL = "https://dlmm.datapi.meteora.ag";
 
 export interface MeteoraToken {
@@ -23,11 +25,7 @@ interface MeteoraPoolsResponse {
 }
 
 async function fetchPoolsPage(params: URLSearchParams): Promise<MeteoraPoolsResponse> {
-  const res = await fetch(`${BASE_URL}/pools?${params.toString()}`);
-  if (!res.ok) {
-    throw new Error(`Meteora pools fetch failed: ${res.status} ${res.statusText}`);
-  }
-  return res.json() as Promise<MeteoraPoolsResponse>;
+  return fetchJson<MeteoraPoolsResponse>(`${BASE_URL}/pools?${params.toString()}`, "Meteora pools fetch");
 }
 
 /** Top DLMM pools by TVL, across `maxPages` pages of `pageSize` each. */

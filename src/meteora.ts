@@ -1,9 +1,10 @@
 import DLMM from "@meteora-ag/dlmm";
 import { Connection, PublicKey, Keypair, sendAndConfirmTransaction } from "@solana/web3.js";
 import BN from "bn.js";
+import { withRetry } from "./retry";
 
 export async function loadPool(connection: Connection, poolAddress: string) {
-  return DLMM.create(connection, new PublicKey(poolAddress));
+  return withRetry(() => DLMM.create(connection, new PublicKey(poolAddress)), { label: `Meteora DLMM.create ${poolAddress}` });
 }
 
 const poolCache = new Map<string, ReturnType<typeof loadPool>>();
@@ -13,13 +14,16 @@ export function getOrLoadPool(connection: Connection, poolAddress: string) {
   let cached = poolCache.get(poolAddress);
   if (!cached) {
     cached = loadPool(connection, poolAddress);
+    // Don't let a failed load permanently poison this pool in the cache — retry the
+    // whole load next time instead of forever returning the same rejected promise.
+    cached.catch(() => poolCache.delete(poolAddress));
     poolCache.set(poolAddress, cached);
   }
   return cached;
 }
 
 export async function getPrice(pool: Awaited<ReturnType<typeof loadPool>>) {
-  const activeBin = await pool.getActiveBin();
+  const activeBin = await withRetry(() => pool.getActiveBin(), { label: "Meteora getActiveBin" });
   return {
     binId: activeBin.binId,
     price: Number(activeBin.pricePerToken),
