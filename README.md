@@ -98,6 +98,7 @@ npm start                  # or: npm run dev (watch mode)
 | `src/config.ts` | env-driven config |
 | `src/retry.ts` | exponential backoff + jitter for retryable read-only calls |
 | `src/dex/httpJson.ts` | fetch+parse-JSON with retry, shared by the REST API modules |
+| `src/alerts.ts` | optional Discord webhook alerts for real-money events |
 | `src/dex/meteoraApi.ts` | Meteora DLMM pool discovery + price (REST, `dlmm.datapi.meteora.ag`) |
 | `src/dex/raydiumApi.ts` | Raydium pool discovery + price (REST, `api-v3.raydium.io`) |
 | `src/dex/raydiumOnchain.ts` | Raydium on-chain price reads (RPC, via `@raydium-io/raydium-sdk-v2`) — signal confirmation |
@@ -127,12 +128,19 @@ npm start                  # or: npm run dev (watch mode)
    re-check but not eliminated — see "Real execution" above. Not yet done: an actual
    live trade with real funds (deliberately not automated — a decision to make in the
    moment, not something this build should do on its own).
-5. Operational hardening — alerting is the remaining piece.
+5. ~~Operational hardening~~ — done.
    ~~Dedicated RPC provider~~ — `RPC_URL` was already env-driven; added a
    startup warning when live trading is on and it's still the shared public
    endpoint, plus provider guidance in `.env.example`. Not a hard-enforced
    gate (any URL passes), since the app can't tell a dedicated endpoint from
    a public one by URL shape alone.
+   ~~Alerting~~ — done: optional Discord webhook (`ALERT_DISCORD_WEBHOOK_URL`,
+   `src/alerts.ts`) fires on real-money events only — fills, leg 1/leg 2
+   failures, leg-risk aborts (unhedged position left open), and the daily
+   loss cap being hit (once per day, not on every subsequent skip). Paper
+   trading never alerts — too high-volume and no real risk. Sends are
+   fire-and-forget so a slow/failed webhook can never delay trading logic,
+   especially the leg-risk window between leg 1 and leg 2.
    ~~Persist the daily loss cap across restarts~~ — done: `LiveTrader` now
    loads/saves today's realized P&L to `LIVE_DAILY_PNL_STATE_PATH`
    (`live-daily-pnl.json` by default) on every fill and day rollover, so a

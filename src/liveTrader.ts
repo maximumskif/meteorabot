@@ -7,6 +7,7 @@ import { getOrLoadPool, getPrice as getMeteoraPrice, quoteSwap, executeSwap as e
 import { swapStandard, swapConcentrated } from "./dex/raydiumSwap";
 import { fetchPriceV3 } from "./dex/jupiterApi";
 import { computeSpreadBps, type Venue } from "./strategy";
+import { sendAlert } from "./alerts";
 
 const WSOL_MINT = "So11111111111111111111111111111111111111112";
 const MIN_SOL_BUFFER_LAMPORTS = 0.02 * 1e9; // covers ~2 tx fees + possible new ATA rent
@@ -66,6 +67,7 @@ async function getVenuePrice(
 export class LiveTrader {
   private dailyRealizedPnlUsd = 0;
   private dailyResetAt = new Date().toDateString();
+  private dailyLossCapAlertSent = false;
 
   constructor(
     private readonly connection: Connection,
@@ -98,6 +100,7 @@ export class LiveTrader {
     if (today !== this.dailyResetAt) {
       this.dailyResetAt = today;
       this.dailyRealizedPnlUsd = 0;
+      this.dailyLossCapAlertSent = false;
       this.saveDailyPnlState();
     }
   }
@@ -152,6 +155,13 @@ export class LiveTrader {
 
     if (this.dailyLossCapBreached()) {
       this.log({ event: "skip", pairKey: params.pairKey, reason: "daily loss cap breached" });
+      if (!this.dailyLossCapAlertSent) {
+        this.dailyLossCapAlertSent = true;
+        sendAlert(
+          `🛑 LIVE daily loss cap breached (realized $${this.dailyRealizedPnlUsd.toFixed(2)} vs -$${config.liveDailyLossCapUsd}) — ` +
+            `no new live trades until tomorrow. Paper trading continues.`
+        );
+      }
       return;
     }
     if (!config.livePairAllowlist.includes(params.pairKey)) {
@@ -201,6 +211,7 @@ export class LiveTrader {
       leg1TxId = await this.executeLeg(params.buyVenue, params, quoteAmountRaw, "quote-to-base");
     } catch (err) {
       this.log({ event: "leg1-failed", pairKey: params.pairKey, buyVenue: params.buyVenue, error: (err as Error).message });
+      sendAlert(`🔴 LIVE leg 1 failed for ${params.pairKey} on ${params.buyVenue}: ${(err as Error).message}. No funds moved.`);
       return;
     }
 
@@ -208,6 +219,7 @@ export class LiveTrader {
     const baseReceived = baseBalanceAfterLeg1.sub(baseBalanceBeforeLeg1);
     if (baseReceived.lte(new BN(0))) {
       this.log({ event: "leg1-produced-nothing", pairKey: params.pairKey, leg1TxId });
+      sendAlert(`🔴 LIVE leg 1 for ${params.pairKey} confirmed (tx ${leg1TxId}) but produced no ${params.baseSymbol} — investigate.`);
       return;
     }
 
@@ -229,6 +241,10 @@ export class LiveTrader {
         survivingSpreadBps,
         message: `leg 1 filled but the edge evaporated before leg 2 (needed >=${minRequiredBps}bps) — leaving unhedged ${params.baseSymbol} position, not chasing it`,
       });
+      sendAlert(
+        `🟠 LIVE leg-risk abort on ${params.pairKey}: leg 1 filled (tx ${leg1TxId}) but edge evaporated before leg 2. ` +
+          `Holding unhedged ${params.baseSymbol} (raw ${baseReceived.toString()}) — not auto-unwound, needs a look.`
+      );
       return;
     }
 
@@ -246,6 +262,10 @@ export class LiveTrader {
         baseHeldUnhedged: baseReceived.toString(),
         error: (err as Error).message,
       });
+      sendAlert(
+        `🔴 LIVE leg 2 failed for ${params.pairKey} on ${params.sellVenue} after leg 1 filled (tx ${leg1TxId}): ${(err as Error).message}. ` +
+          `Holding unhedged ${params.baseSymbol} (raw ${baseReceived.toString()}) — needs a look.`
+      );
       return;
     }
 
@@ -270,5 +290,9 @@ export class LiveTrader {
       pnlUsd,
       dailyRealizedPnlUsd: this.dailyRealizedPnlUsd,
     });
+    sendAlert(
+      `${pnlUsd >= 0 ? "🟢" : "🟡"} LIVE fill: ${params.pairKey} buy ${params.buyVenue} → sell ${params.sellVenue}, ` +
+        `pnl $${pnlUsd.toFixed(2)} (today: $${this.dailyRealizedPnlUsd.toFixed(2)})`
+    );
   }
 }

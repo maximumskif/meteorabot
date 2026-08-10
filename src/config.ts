@@ -41,6 +41,11 @@ export const config = {
   liveMaxPositionPctOfTvl: Number(process.env.LIVE_MAX_POSITION_PCT_OF_TVL ?? 1),
   liveTradeLogPath: process.env.LIVE_TRADE_LOG_PATH ?? "real-trades.jsonl",
   liveDailyPnlStatePath: process.env.LIVE_DAILY_PNL_STATE_PATH ?? "live-daily-pnl.json",
+
+  // Optional. If set, LiveTrader posts real-money events (fills, leg failures, leg-risk
+  // aborts, daily loss cap hit) to this Discord webhook URL. Alerting never blocks or
+  // slows trading logic — a failed/slow webhook post is logged and swallowed, not awaited.
+  alertDiscordWebhookUrl: process.env.ALERT_DISCORD_WEBHOOK_URL ?? "",
 };
 
 /** Not a hard gate (any non-default URL passes) — just flags the specific known-shared, rate-limited public endpoint so a live-trading warning can point at it. */
