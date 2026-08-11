@@ -20,7 +20,7 @@ const RAYDIUM_BATCH_DELAY_MS = 200;
  */
 const MAX_PLAUSIBLE_SPREAD_BPS = 2000;
 
-interface Candidate {
+export interface Candidate {
   baseMint: string;
   baseSymbol: string;
   baseDecimals: number;
@@ -48,7 +48,8 @@ function dedupeByPair(pools: MeteoraPool[]): MeteoraPool[] {
   return [...best.values()];
 }
 
-async function main() {
+/** Fetches, filters, and ranks candidates fresh — used by both the CLI entrypoint below and index.ts's periodic rescan. Does not touch disk. */
+export async function scanCandidates(): Promise<Candidate[]> {
   console.log(`Fetching top ${METEORA_PAGES * METEORA_PAGE_SIZE} Meteora DLMM pools by TVL...`);
   const meteoraPools = await fetchTopPoolsByTvl(METEORA_PAGE_SIZE, METEORA_PAGES);
   const pairs = dedupeByPair(meteoraPools);
@@ -100,8 +101,17 @@ async function main() {
   }
 
   plausible.sort((a, b) => b.combinedTvl - a.combinedTvl);
+  return plausible;
+}
 
-  writeFileSync(config.candidatesPath, JSON.stringify(plausible, null, 2));
+export function writeCandidates(candidates: Candidate[]): void {
+  writeFileSync(config.candidatesPath, JSON.stringify(candidates, null, 2));
+}
+
+async function main() {
+  const plausible = await scanCandidates();
+
+  writeCandidates(plausible);
   console.log(
     `\n${plausible.length} pairs live on both venues with >= $${config.minPoolTvlUsd.toLocaleString()} TVL each ` +
       `and a plausible spread. Wrote ${config.candidatesPath}.\n`
@@ -116,7 +126,11 @@ async function main() {
   }
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+// Only run the CLI report (and process.exit) when invoked directly, not when
+// scanCandidates()/writeCandidates() are imported by index.ts for a periodic rescan.
+if (require.main === module) {
+  main().catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
+}

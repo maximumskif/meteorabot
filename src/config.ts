@@ -19,6 +19,11 @@ export const config = {
   candidatesPath: process.env.CANDIDATES_PATH ?? "candidates.json",
   minPoolTvlUsd: Number(process.env.MIN_POOL_TVL_USD ?? 20_000),
 
+  // How often the live loop re-runs the scanner to refresh candidates.json in the
+  // background, in ms. 0 disables auto-rescan (candidates.json only changes via a manual
+  // `npm run scan-pairs`, same as before this existed).
+  scanIntervalMs: Number(process.env.SCAN_INTERVAL_MS ?? 6 * 60 * 60 * 1000),
+
   tradeNotionalUsd: Number(process.env.TRADE_NOTIONAL_USD ?? 500),
   slippageBps: Number(process.env.SLIPPAGE_BPS ?? 50),
   entryThresholdBps: Number(process.env.ENTRY_THRESHOLD_BPS ?? 25),

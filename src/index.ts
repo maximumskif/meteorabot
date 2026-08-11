@@ -14,6 +14,7 @@ import { PaperTrader } from "./paperTrader";
 import { LiveTrader } from "./liveTrader";
 import { mapWithConcurrency } from "./concurrency";
 import { sleep } from "./retry";
+import { scanCandidates, writeCandidates } from "./scanPairs";
 
 /**
  * How many candidates to check concurrently per cycle, and the pause between batches.
@@ -254,11 +255,17 @@ async function checkPair(candidate: Candidate, trader: PaperTrader, connection: 
 }
 
 async function main() {
-  const candidates = loadCandidates();
+  let candidates = loadCandidates();
+  let lastScanAt = Date.now();
   const connection = createConnection(config.rpcUrl);
   const trader = new PaperTrader(config.tradeLogPath, config.tradeCooldownMs);
 
   console.log(`Monitoring ${candidates.length} pairs from ${config.candidatesPath}`);
+  console.log(
+    config.scanIntervalMs > 0
+      ? `Rescan interval:   every ${(config.scanIntervalMs / 60_000).toFixed(0)}min, refreshes ${config.candidatesPath} in the background`
+      : `Rescan interval:   disabled (SCAN_INTERVAL_MS=0) — candidates.json only changes via a manual "npm run scan-pairs"`
+  );
   console.log(`RPC:               ${config.rpcUrl} (only used to confirm signals, not per-tick)`);
   console.log(`Entry threshold:   ${config.entryThresholdBps} bps + ${config.assumedRoundTripCostBps} bps assumed cost`);
   console.log(`Trade notional:    $${config.tradeNotionalUsd}`);
@@ -297,6 +304,23 @@ async function main() {
   // waiting out a now-meaningless remainder.
   for (;;) {
     const cycleStart = Date.now();
+
+    if (config.scanIntervalMs > 0 && cycleStart - lastScanAt >= config.scanIntervalMs) {
+      try {
+        console.log(`[scan] refreshing candidates (${((cycleStart - lastScanAt) / 60_000).toFixed(0)}min since last scan)...`);
+        const fresh = await scanCandidates();
+        candidates = fresh;
+        writeCandidates(fresh);
+        console.log(`[scan] refreshed ${config.candidatesPath}: ${fresh.length} pairs\n`);
+      } catch (err) {
+        // Keep trading on the existing (now slightly stale) list rather than crashing the
+        // whole process over a scan failure — a transient API blip shouldn't stop paper/live
+        // trading on pairs that are still fine.
+        console.error(`[scan] refresh failed, keeping existing ${candidates.length} candidates:`, err);
+      }
+      lastScanAt = Date.now();
+    }
+
     await mapWithConcurrency(candidates, POLL_CONCURRENCY, POLL_BATCH_DELAY_MS, async (candidate) => {
       try {
         await checkPair(candidate, trader, connection, liveTrader);

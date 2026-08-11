@@ -29,7 +29,10 @@ independent liquidity).
    (`dlmm.datapi.meteora.ag`), then check Raydium (`api-v3.raydium.io`) for a
    matching pool on the same pair. Keep pairs with real liquidity on both
    venues (`MIN_POOL_TVL_USD`), compute the current spread, and write a
-   ranked shortlist to `candidates.json`.
+   ranked shortlist to `candidates.json`. `npm start`/`npm run dev` also
+   re-run this in the background every `SCAN_INTERVAL_MS` (default 6h, 0 to
+   disable) so the candidate list doesn't silently go stale over a long-running
+   session — no need to restart the process to pick up fresh pools/TVL.
 2. **Monitor** (`npm start`): poll each candidate's Meteora + Raydium price
    every `POLL_INTERVAL_MS` via REST — cheap, but confirmed live to be an
    indexer/cache layer that can return bit-for-bit identical prices across
@@ -175,8 +178,9 @@ npm start                  # or: npm run dev (watch mode)
 ## Notes
 
 - `.env` and `candidates.json` are gitignored — never commit real RPC
-  endpoints, a wallet secret key, or assume a stale candidate list is current
-  (liquidity/spreads move; re-run `scan-pairs` periodically).
+  endpoints or a wallet secret key. The live loop auto-refreshes
+  `candidates.json` every `SCAN_INTERVAL_MS` (see above); for a one-off
+  manual refresh, e.g. right before a session, run `scan-pairs` directly.
 - Built by verifying every SDK/API claim against live, installed packages and
   real endpoints rather than assuming API shapes from memory — the old
   `dlmm-api.meteora.ag` host, for example, is fully dead; the current one is
