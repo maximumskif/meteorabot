@@ -12,6 +12,18 @@ import { raydiumPriceInCanonical } from "./dex/normalize";
 import { computeSpreadBps, decideEntry, type Venue } from "./strategy";
 import { PaperTrader } from "./paperTrader";
 import { LiveTrader } from "./liveTrader";
+import { mapWithConcurrency } from "./concurrency";
+import { sleep } from "./retry";
+
+/**
+ * How many candidates to check concurrently per cycle, and the pause between batches.
+ * Checking all candidates strictly sequentially made a full cycle take longer than
+ * pollIntervalMs (2 REST calls x 41 pairs, no concurrency), which meant the old
+ * setInterval-based loop started overlapping cycles against itself — same pattern
+ * scanPairs.ts already avoids with its own batching.
+ */
+const POLL_CONCURRENCY = 5;
+const POLL_BATCH_DELAY_MS = 200;
 
 /**
  * If Jupiter's own routed price disagrees with the on-chain-confirmed mid by more than
@@ -279,15 +291,24 @@ async function main() {
     console.log(`Live trading:      off (paper only) — see .env.example for LIVE_* flags\n`);
   }
 
-  setInterval(async () => {
-    for (const candidate of candidates) {
+  // Self-scheduling instead of setInterval: a cycle never starts before the previous one
+  // finished, so a slow cycle (rate-limited API, RPC hiccup) can't stack concurrent cycles
+  // on top of itself. If a cycle runs long, the next one starts immediately rather than
+  // waiting out a now-meaningless remainder.
+  for (;;) {
+    const cycleStart = Date.now();
+    await mapWithConcurrency(candidates, POLL_CONCURRENCY, POLL_BATCH_DELAY_MS, async (candidate) => {
       try {
         await checkPair(candidate, trader, connection, liveTrader);
       } catch (err) {
         console.error(`[error] ${candidate.baseSymbol}/${candidate.quoteSymbol}`, err);
       }
-    }
-  }, config.pollIntervalMs);
+    });
+    const elapsedMs = Date.now() - cycleStart;
+    const waitMs = Math.max(0, config.pollIntervalMs - elapsedMs);
+    console.log(`[cycle] ${elapsedMs}ms for ${candidates.length} pairs, next in ${waitMs}ms\n`);
+    await sleep(waitMs);
+  }
 }
 
 main().catch((err) => {

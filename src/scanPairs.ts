@@ -4,6 +4,7 @@ import { fetchPoolsByMints } from "./dex/raydiumApi";
 import { raydiumPriceInCanonical } from "./dex/normalize";
 import { computeSpreadBps } from "./strategy";
 import { config } from "./config";
+import { mapWithConcurrency } from "./concurrency";
 
 const METEORA_PAGE_SIZE = 100;
 const METEORA_PAGES = Number(process.env.SCAN_METEORA_PAGES ?? 5);
@@ -45,23 +46,6 @@ function dedupeByPair(pools: MeteoraPool[]): MeteoraPool[] {
     if (!existing || pool.tvl > existing.tvl) best.set(key, pool);
   }
   return [...best.values()];
-}
-
-async function mapWithConcurrency<T, R>(
-  items: T[],
-  concurrency: number,
-  batchDelayMs: number,
-  fn: (item: T) => Promise<R>
-): Promise<R[]> {
-  const results: R[] = [];
-  for (let i = 0; i < items.length; i += concurrency) {
-    const batch = items.slice(i, i + concurrency);
-    results.push(...(await Promise.all(batch.map(fn))));
-    if (i + concurrency < items.length) {
-      await new Promise((resolve) => setTimeout(resolve, batchDelayMs));
-    }
-  }
-  return results;
 }
 
 async function main() {
