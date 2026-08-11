@@ -1,15 +1,17 @@
-# gaytry
+# meteorabot
 
 A cross-DEX Solana arbitrage paper-trading bot (TypeScript/Node, `tsx` runtime).
 Compares a token pair's price on **Meteora DLMM** against its price on **Raydium**
 (AMM + CLMM) and paper-trades a two-leg arb when the spread is wide enough to be
-profitable net of assumed costs. No real funds or wallet involved yet.
+profitable net of assumed costs.
 
 **Status:** paper trading always runs. Real execution code exists (Meteora + Raydium
 AMM/CLMM swap building, hard risk gates, a localnet fork test that sends real
 transactions against forked mainnet state with zero real funds at risk — see
-`npm run fork-test`, currently passing 3/3) but is **off by default** — see
-"Real execution" below before ever turning it on.
+`npm run fork-test`, currently passing 3/3) and is **off by default** — see
+"Real execution" below before ever turning it on. It has been run live-armed
+against a funded wallet with all gates satisfied; no trade has fired yet (the
+allowlisted pair is tight enough that a qualifying signal is rare, by design).
 
 ## Why cross-DEX, not vs. a CEX
 

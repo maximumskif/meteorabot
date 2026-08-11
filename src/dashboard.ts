@@ -31,7 +31,7 @@ const PAGE = /* html */ `<!doctype html>
 <html>
 <head>
 <meta charset="utf-8" />
-<title>gaytry — live paper trades</title>
+<title>meteorabot — live paper trades</title>
 <style>
   :root {
     color-scheme: light;
@@ -104,7 +104,7 @@ const PAGE = /* html */ `<!doctype html>
 <div class="wrap">
   <header>
     <div>
-      <h1>gaytry — live paper trades</h1>
+      <h1>meteorabot — live paper trades</h1>
       <div class="sub">Meteora &harr; Raydium cross-DEX arb, paper-trading only</div>
     </div>
     <div class="pulse"><span class="dot"></span><span id="updated">connecting…</span></div>
