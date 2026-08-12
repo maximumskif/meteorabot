@@ -85,6 +85,34 @@ function loadCandidates(): Candidate[] {
   return candidates;
 }
 
+/**
+ * Drops any pair whose TVL fell by >= dropRejectPct on either venue since the previous
+ * scan — only a runtime decision for this live loop's monitoring list, not persisted to
+ * candidates.json, so a restart naturally re-includes the pair with a fresh baseline
+ * rather than excluding it forever over one observed drop.
+ */
+function filterTvlDrops(previous: Candidate[], fresh: Candidate[], dropRejectPct: number): Candidate[] {
+  if (dropRejectPct <= 0) return fresh;
+  const prevByPairKey = new Map(previous.map((c) => [`${c.baseSymbol}/${c.quoteSymbol}`, c]));
+  return fresh.filter((c) => {
+    const pairKey = `${c.baseSymbol}/${c.quoteSymbol}`;
+    const prev = prevByPairKey.get(pairKey);
+    if (!prev) return true; // no prior baseline (newly discovered pair) to compare against
+    const meteoraDrop = (prev.meteoraTvl - c.meteoraTvl) / prev.meteoraTvl;
+    const raydiumDrop = (prev.raydiumTvl - c.raydiumTvl) / prev.raydiumTvl;
+    const worstDrop = Math.max(meteoraDrop, raydiumDrop);
+    if (worstDrop >= dropRejectPct) {
+      console.log(
+        `[tvl-drop] ${pairKey} excluded — TVL fell ${(worstDrop * 100).toFixed(0)}% since last scan ` +
+          `(meteora $${prev.meteoraTvl.toFixed(0)}->$${c.meteoraTvl.toFixed(0)}, raydium $${prev.raydiumTvl.toFixed(0)}->$${c.raydiumTvl.toFixed(0)}) ` +
+          `— likely a liquidity pull in progress, not trading it until a future scan confirms it's stable`
+      );
+      return false;
+    }
+    return true;
+  });
+}
+
 async function checkPair(
   candidate: Candidate,
   trader: PaperTrader,
@@ -292,6 +320,11 @@ async function main() {
   console.log(`RPC:               ${config.rpcUrl} (only used to confirm signals, not per-tick)`);
   console.log(`Entry threshold:   ${config.entryThresholdBps} bps + ${config.assumedRoundTripCostBps} bps assumed cost`);
   console.log(`Z-score gate:      >=${config.zScoreThreshold} stddev from a pair's own recent mean spread (after >=10 samples)`);
+  console.log(
+    config.tvlDropRejectPct > 0
+      ? `TVL-drop filter:   excludes a pair if either venue's TVL falls >=${(config.tvlDropRejectPct * 100).toFixed(0)}% between scans`
+      : `TVL-drop filter:   disabled (TVL_DROP_REJECT_PCT=0)`
+  );
   console.log(`Trade notional:    $${config.tradeNotionalUsd}`);
   console.log(`Trade cooldown:    ${config.tradeCooldownMs}ms per pair`);
   console.log(`Paper trading:     always on, logs to ${config.tradeLogPath}\n`);
@@ -333,9 +366,9 @@ async function main() {
       try {
         console.log(`[scan] refreshing candidates (${((cycleStart - lastScanAt) / 60_000).toFixed(0)}min since last scan)...`);
         const fresh = await scanCandidates();
-        candidates = fresh;
-        writeCandidates(fresh);
-        console.log(`[scan] refreshed ${config.candidatesPath}: ${fresh.length} pairs\n`);
+        writeCandidates(fresh); // persist the full, unfiltered scan — TVL-drop filtering is a live-loop trading decision, not a scanning one
+        candidates = filterTvlDrops(candidates, fresh, config.tvlDropRejectPct);
+        console.log(`[scan] refreshed ${config.candidatesPath}: ${fresh.length} pairs, monitoring ${candidates.length} after TVL-drop filter\n`);
       } catch (err) {
         // Keep trading on the existing (now slightly stale) list rather than crashing the
         // whole process over a scan failure — a transient API blip shouldn't stop paper/live

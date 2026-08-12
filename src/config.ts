@@ -24,6 +24,14 @@ export const config = {
   // `npm run scan-pairs`, same as before this existed).
   scanIntervalMs: Number(process.env.SCAN_INTERVAL_MS ?? 6 * 60 * 60 * 1000),
 
+  // If a pair's TVL on either venue drops by at least this fraction between two
+  // consecutive background rescans, it's excluded from live monitoring until the next
+  // scan confirms it's stable again — a fast TVL drop is a cheap proxy for a liquidity
+  // pull in progress, exactly the kind of pair that produces fake-looking spread spikes.
+  // Only compares against the immediately-prior in-memory scan, so it has no effect until
+  // the process has run through at least one auto-rescan (see SCAN_INTERVAL_MS).
+  tvlDropRejectPct: Number(process.env.TVL_DROP_REJECT_PCT ?? 0.5),
+
   tradeNotionalUsd: Number(process.env.TRADE_NOTIONAL_USD ?? 500),
   slippageBps: Number(process.env.SLIPPAGE_BPS ?? 50),
   entryThresholdBps: Number(process.env.ENTRY_THRESHOLD_BPS ?? 25),
