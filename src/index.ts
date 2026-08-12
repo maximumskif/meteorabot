@@ -9,12 +9,13 @@ import { fetchQuote } from "./dex/jupiterApi";
 import { fetchOnchainPrice, quoteRaydiumFill } from "./dex/raydiumOnchain";
 import { getOrLoadPool, getPrice as getMeteoraOnchainPrice, quoteSwap } from "./meteora";
 import { raydiumPriceInCanonical } from "./dex/normalize";
-import { computeSpreadBps, decideEntry, type Venue } from "./strategy";
+import { computeSpreadBps, decideEntry, isStatisticallyUnusual, type Venue } from "./strategy";
 import { PaperTrader } from "./paperTrader";
 import { LiveTrader } from "./liveTrader";
 import { mapWithConcurrency } from "./concurrency";
 import { sleep } from "./retry";
 import { scanCandidates, writeCandidates } from "./scanPairs";
+import { SpreadTracker } from "./spreadTracker";
 
 /**
  * How many candidates to check concurrently per cycle, and the pause between batches.
@@ -84,7 +85,13 @@ function loadCandidates(): Candidate[] {
   return candidates;
 }
 
-async function checkPair(candidate: Candidate, trader: PaperTrader, connection: Connection, liveTrader: LiveTrader | null) {
+async function checkPair(
+  candidate: Candidate,
+  trader: PaperTrader,
+  connection: Connection,
+  liveTrader: LiveTrader | null,
+  spreadTracker: SpreadTracker
+) {
   const pairKey = `${candidate.baseSymbol}/${candidate.quoteSymbol}`;
 
   // Stage 1: cheap REST poll, just to decide whether this pair is worth a closer look.
@@ -108,8 +115,23 @@ async function checkPair(candidate: Candidate, trader: PaperTrader, connection: 
     `[tick] ${pairKey} meteora=${restMeteoraPrice.toFixed(6)} raydium=${restRaydiumPrice.toFixed(6)} spreadBps=${restSpreadBps.toFixed(2)}`
   );
 
+  // Feed every tick's spread in, not just ones that clear a threshold, so the pair's
+  // rolling stats reflect its actual normal behavior rather than a biased sample.
+  spreadTracker.record(pairKey, restSpreadBps);
+
   if (!trader.canTrade(pairKey)) return;
   if (decideEntry(restSpreadBps, config.entryThresholdBps, config.assumedRoundTripCostBps, config.slippageBps) === "hold") return;
+
+  const spreadStats = spreadTracker.stats(pairKey);
+  if (!isStatisticallyUnusual(restSpreadBps, spreadStats, config.zScoreThreshold)) {
+    trader.markCooldown(pairKey);
+    console.log(
+      `[reject] ${pairKey} spreadBps=${restSpreadBps.toFixed(2)} clears the flat threshold but isn't unusual for this ` +
+        `pair (mean=${spreadStats!.mean.toFixed(2)} stdDev=${spreadStats!.stdDev.toFixed(2)} n=${spreadStats!.sampleCount}) — ` +
+        `likely just its normal noise, not a real dislocation`
+    );
+    return;
+  }
 
   // Stage 2: fresh on-chain RPC read on both venues before trusting the REST-detected signal.
   let meteoraPrice: number;
@@ -259,6 +281,7 @@ async function main() {
   let lastScanAt = Date.now();
   const connection = createConnection(config.rpcUrl);
   const trader = new PaperTrader(config.tradeLogPath, config.tradeCooldownMs);
+  const spreadTracker = new SpreadTracker();
 
   console.log(`Monitoring ${candidates.length} pairs from ${config.candidatesPath}`);
   console.log(
@@ -268,6 +291,7 @@ async function main() {
   );
   console.log(`RPC:               ${config.rpcUrl} (only used to confirm signals, not per-tick)`);
   console.log(`Entry threshold:   ${config.entryThresholdBps} bps + ${config.assumedRoundTripCostBps} bps assumed cost`);
+  console.log(`Z-score gate:      >=${config.zScoreThreshold} stddev from a pair's own recent mean spread (after >=10 samples)`);
   console.log(`Trade notional:    $${config.tradeNotionalUsd}`);
   console.log(`Trade cooldown:    ${config.tradeCooldownMs}ms per pair`);
   console.log(`Paper trading:     always on, logs to ${config.tradeLogPath}\n`);
@@ -323,7 +347,7 @@ async function main() {
 
     await mapWithConcurrency(candidates, POLL_CONCURRENCY, POLL_BATCH_DELAY_MS, async (candidate) => {
       try {
-        await checkPair(candidate, trader, connection, liveTrader);
+        await checkPair(candidate, trader, connection, liveTrader, spreadTracker);
       } catch (err) {
         console.error(`[error] ${candidate.baseSymbol}/${candidate.quoteSymbol}`, err);
       }

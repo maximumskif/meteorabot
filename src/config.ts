@@ -27,6 +27,13 @@ export const config = {
   tradeNotionalUsd: Number(process.env.TRADE_NOTIONAL_USD ?? 500),
   slippageBps: Number(process.env.SLIPPAGE_BPS ?? 50),
   entryThresholdBps: Number(process.env.ENTRY_THRESHOLD_BPS ?? 25),
+
+  // Additional gate on top of the flat threshold above: how many standard deviations from
+  // a pair's own recent mean spread the current spread must be, once there's enough history
+  // (see src/spreadTracker.ts). 0 effectively disables this gate (near-any nonzero deviation
+  // clears a 0 threshold).
+  zScoreThreshold: Number(process.env.ZSCORE_THRESHOLD ?? 2.0),
+
   assumedRoundTripCostBps: Number(process.env.ASSUMED_ROUND_TRIP_COST_BPS ?? 60),
   tradeCooldownMs: Number(process.env.TRADE_COOLDOWN_MS ?? 60_000),
 
