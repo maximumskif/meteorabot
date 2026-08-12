@@ -197,15 +197,20 @@ async function checkPair(
     return;
   }
 
-  // Stage 3: real depth-aware quote for the actual configured notional against the actual
+  // Stage 3: real depth-aware quote for the actual sized notional against the actual
   // venues, chained leg-to-leg exactly like a real trade (leg 2's input is leg 1's output).
   // A spot-price spread can look profitable while the configured notional eats itself in
   // price impact alone on a thin pool — confirmed live: a $500 fill against a pool barely
   // above MIN_POOL_TVL_USD showed 20%+ real price impact vs. the flat ~0.5% SLIPPAGE_BPS
   // this used to assume for every pool regardless of depth, and every single paper fill in
-  // a 6-minute run came from two such pairs whose "spread" never actually moved.
+  // a 6-minute run came from two such pairs whose "spread" never actually moved. Sizing down
+  // on thin pools (instead of always using the full configured notional) keeps that from
+  // being a foregone conclusion on every thin pair.
+  const minTvl = Math.min(candidate.meteoraTvl, candidate.raydiumTvl);
+  const sizedNotionalUsd = Math.min(config.tradeNotionalUsd, (minTvl * config.tradeMaxPositionPctOfTvl) / 100);
+
   const quoteUsdPrice = meteoraPool.token_y.price;
-  const quoteAmountRaw = new BN(Math.round((config.tradeNotionalUsd / quoteUsdPrice) * 10 ** candidate.quoteDecimals));
+  const quoteAmountRaw = new BN(Math.round((sizedNotionalUsd / quoteUsdPrice) * 10 ** candidate.quoteDecimals));
 
   let baseReceivedRaw: BN;
   let quoteReceivedRaw: BN;
@@ -227,7 +232,7 @@ async function checkPair(
   if (realNetPnlBps <= 0) {
     trader.markCooldown(pairKey);
     console.log(
-      `[reject] ${pairKey} spot spreadBps=${spreadBps.toFixed(2)} but a real depth-aware $${config.tradeNotionalUsd} fill ` +
+      `[reject] ${pairKey} spot spreadBps=${spreadBps.toFixed(2)} but a real depth-aware $${sizedNotionalUsd.toFixed(0)} fill ` +
         `nets ${realNetPnlBps.toFixed(2)}bps after price impact — the spread wasn't really tradeable at this size`
     );
     return;
@@ -236,7 +241,7 @@ async function checkPair(
   let jupiterCheckPassed = false;
   let jupiterNote: string;
   try {
-    const inAmountRaw = Math.round((config.tradeNotionalUsd / meteoraPool.token_x.price) * 10 ** meteoraPool.token_x.decimals);
+    const inAmountRaw = Math.round((sizedNotionalUsd / meteoraPool.token_x.price) * 10 ** meteoraPool.token_x.decimals);
     const quote = await fetchQuote(candidate.baseMint, candidate.quoteMint, String(inAmountRaw));
     const inHuman = Number(quote.inAmount) / 10 ** meteoraPool.token_x.decimals;
     const outHuman = Number(quote.outAmount) / 10 ** meteoraPool.token_y.decimals;
@@ -266,13 +271,13 @@ async function checkPair(
     buyFillPrice,
     sellFillPrice,
     entrySpreadBps: spreadBps,
-    notionalUsd: config.tradeNotionalUsd,
+    notionalUsd: sizedNotionalUsd,
     assumedRoundTripCostBps: config.assumedRoundTripCostBps,
   });
 
   console.log(
     `[fill] ${pairKey} buy=${result.buyVenue}@${result.buyFillPrice.toFixed(6)} sell=${result.sellVenue}@${result.sellFillPrice.toFixed(6)} ` +
-      `netPnlBps=${result.netPnlBps.toFixed(2)} pnlUsd=${result.pnlUsd.toFixed(4)} (${jupiterNote})`
+      `notional=$${sizedNotionalUsd.toFixed(0)} netPnlBps=${result.netPnlBps.toFixed(2)} pnlUsd=${result.pnlUsd.toFixed(4)} (${jupiterNote})`
   );
 
   // Paper simulation above always runs and always logs, independent of live trading.
@@ -325,7 +330,7 @@ async function main() {
       ? `TVL-drop filter:   excludes a pair if either venue's TVL falls >=${(config.tvlDropRejectPct * 100).toFixed(0)}% between scans`
       : `TVL-drop filter:   disabled (TVL_DROP_REJECT_PCT=0)`
   );
-  console.log(`Trade notional:    $${config.tradeNotionalUsd}`);
+  console.log(`Trade notional:    up to $${config.tradeNotionalUsd}, sized down to <=${config.tradeMaxPositionPctOfTvl}% of the smaller pool's TVL`);
   console.log(`Trade cooldown:    ${config.tradeCooldownMs}ms per pair`);
   console.log(`Paper trading:     always on, logs to ${config.tradeLogPath}\n`);
 

@@ -32,7 +32,13 @@ export const config = {
   // the process has run through at least one auto-rescan (see SCAN_INTERVAL_MS).
   tvlDropRejectPct: Number(process.env.TVL_DROP_REJECT_PCT ?? 0.5),
 
+  // Upper cap on paper-trade size — the actual size used is min(this, minPoolTvl *
+  // TRADE_MAX_POSITION_PCT_OF_TVL / 100), so a thin pool near MIN_POOL_TVL_USD gets sized
+  // down instead of always eating this full notional's worth of price impact. Confirmed
+  // live: a flat $500 fill against a pool barely above MIN_POOL_TVL_USD showed 20-49x more
+  // real price impact than assumed for a deep pool at the same notional.
   tradeNotionalUsd: Number(process.env.TRADE_NOTIONAL_USD ?? 500),
+  tradeMaxPositionPctOfTvl: Number(process.env.TRADE_MAX_POSITION_PCT_OF_TVL ?? 2),
   slippageBps: Number(process.env.SLIPPAGE_BPS ?? 50),
   entryThresholdBps: Number(process.env.ENTRY_THRESHOLD_BPS ?? 25),
 
