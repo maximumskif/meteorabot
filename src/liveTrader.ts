@@ -68,6 +68,11 @@ export class LiveTrader {
   private dailyRealizedPnlUsd = 0;
   private dailyResetAt = new Date().toDateString();
   private dailyLossCapAlertSent = false;
+  // Serializes attemptTrade calls so two pairs' trades (index.ts now checks candidates
+  // concurrently) can never race past the daily-loss-cap check before either one's P&L is
+  // recorded — without this, two concurrent live trades could both see "not breached yet"
+  // and both fire, blowing past the cap in one burst instead of stopping cleanly.
+  private queue: Promise<void> = Promise.resolve();
 
   constructor(
     private readonly connection: Connection,
@@ -150,7 +155,13 @@ export class LiveTrader {
     return txId;
   }
 
-  async attemptTrade(params: LiveTradeParams, raydiumRawPriceInCanonical: (raw: number, mintA: string) => number): Promise<void> {
+  attemptTrade(params: LiveTradeParams, raydiumRawPriceInCanonical: (raw: number, mintA: string) => number): Promise<void> {
+    const run = this.queue.then(() => this.executeAttempt(params, raydiumRawPriceInCanonical));
+    this.queue = run.catch(() => {}); // a failed/rejected attempt must not permanently block the queue for later trades
+    return run;
+  }
+
+  private async executeAttempt(params: LiveTradeParams, raydiumRawPriceInCanonical: (raw: number, mintA: string) => number): Promise<void> {
     this.rolloverDayIfNeeded();
 
     if (this.dailyLossCapBreached()) {
